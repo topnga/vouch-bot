@@ -14,15 +14,17 @@ TOKEN = os.environ.get('DISCORD_TOKEN')
 # Channel where /success works
 ALLOWED_CHANNEL_ID = 1465880033481720011
 
-# Role required to use /announce AND see Tickets
+# Role required to use /announce AND see Tickets (Admin)
 ADMIN_ROLE_ID = 1465896921074897140
 
-# Role to give NEW members automatically
-NEW_MEMBER_ROLE_ID = 1465897609267777748
+# [NEW] The "Verified" Member Role (Given by RestoreCord)
+MEMBER_ROLE_ID = 1465888391580090379
 
-# Category ID where tickets will be created
-# Create a category in Discord, right-click it -> Copy ID
-TICKET_CATEGORY_ID = 000000000000000000  
+# [NEW] The "Unverified" Role (Given on Join, Removed on Verify)
+UNVERIFIED_ROLE_ID = 1465897609267777748
+
+# [NEW] Category ID where tickets will be created
+TICKET_CATEGORY_ID = 1465924314854326313
 
 # --- 2. THE "HEARTBEAT" SERVER ---
 app = Flask('')
@@ -43,7 +45,6 @@ class TicketLauncher(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    # UPDATED: Changed style to DANGER (Red) to match Orange theme
     @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.danger, emoji="📩", custom_id="ticket_button")
     async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         
@@ -85,7 +86,7 @@ class TicketLauncher(discord.ui.View):
             embed = discord.Embed(
                 title=f"Support Ticket - {interaction.user.name}",
                 description="Staff will be with you shortly.\nClick the button below to close this ticket.",
-                color=discord.Color(0xff7828) # Updated to match theme
+                color=discord.Color(0xff7828)
             )
             await channel.send(f"{interaction.user.mention}", embed=embed, view=CloseButton())
 
@@ -178,49 +179,85 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
         print(f"Error: {e}")
         await interaction.followup.send("❌ An error occurred processing the image.")
 
-# COMMAND 2: /announce
+# COMMAND 2: /announce (Fixed Timeout & Errors)
 @bot.tree.command(name="announce", description="Post an official announcement.")
 @app_commands.describe(title="The title", message="Use \\n for new lines", image="Optional banner image")
 async def announce(interaction: discord.Interaction, title: str, message: str, image: discord.Attachment = None):
+    # Defer immediately to avoid timeout
+    await interaction.response.defer(ephemeral=True)
+
     user_role_ids = [role.id for role in interaction.user.roles]
     if ADMIN_ROLE_ID not in user_role_ids:
-        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        await interaction.followup.send("❌ You do not have permission to use this command.")
         return
-    formatted_message = message.replace('\\n', '\n')
-    embed = discord.Embed(title=title, description=formatted_message, color=discord.Color(0xff7828))
-    embed.set_footer(text="Prime Refunds")
-    if image and image.content_type.startswith('image/'):
-        embed.set_image(url=image.url)
-    await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✅ Sent!", ephemeral=True)
 
-# COMMAND 3: /ticketpanel (UPDATED COLOR)
+    try:
+        formatted_message = message.replace('\\n', '\n')
+        
+        if len(formatted_message) > 4096:
+            await interaction.followup.send("❌ Error: Message too long (Max 4096 chars).")
+            return
+
+        embed = discord.Embed(title=title, description=formatted_message, color=discord.Color(0xff7828))
+        embed.set_footer(text="Prime Refunds")
+        
+        if image:
+            if image.content_type.startswith('image/'):
+                embed.set_image(url=image.url)
+            else:
+                await interaction.followup.send("⚠️ Warning: Attachment was not an image.")
+
+        await interaction.channel.send(embed=embed)
+        await interaction.followup.send("✅ Sent!")
+
+    except discord.Forbidden:
+        await interaction.followup.send("❌ Permission Error: I can't send messages here. Check Channel Permissions.")
+    except Exception as e:
+        await interaction.followup.send(f"❌ Error: {e}")
+
+# COMMAND 3: /ticketpanel
 @bot.tree.command(name="ticketpanel", description="Setup the support ticket panel.")
 async def ticketpanel(interaction: discord.Interaction, title: str = "Support Tickets", description: str = "Click below to open a ticket."):
-    # Permission Check
     user_role_ids = [role.id for role in interaction.user.roles]
     if ADMIN_ROLE_ID not in user_role_ids:
         await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
-    # UPDATED: Color matches /announce
     embed = discord.Embed(title=title, description=description, color=discord.Color(0xff7828))
     embed.set_footer(text="Prime Refunds Support")
     
     await interaction.channel.send(embed=embed, view=TicketLauncher())
     await interaction.response.send_message("✅ Ticket panel created!", ephemeral=True)
 
-# --- 6. EVENTS ---
+# --- 6. EVENTS & ROLE LOGIC ---
+
+# 1. On Join: Give Unverified Role
 @bot.event
 async def on_member_join(member):
-    if NEW_MEMBER_ROLE_ID != 0:
-        role = member.guild.get_role(NEW_MEMBER_ROLE_ID)
+    if UNVERIFIED_ROLE_ID != 0:
+        role = member.guild.get_role(UNVERIFIED_ROLE_ID)
         if role:
             try:
                 await member.add_roles(role)
-                print(f"✅ Assigned role to {member.name}")
+                print(f"✅ Assigned Unverified role to {member.name}")
             except discord.Forbidden:
-                print("❌ ERROR: Bot role is too low!")
+                print("❌ ERROR: Bot role is too low to assign Unverified role!")
+
+# 2. On Update: Check for Verification & Swap Roles
+@bot.event
+async def on_member_update(before, after):
+    # Check if the user has the "Member" role (Given by RestoreCord)
+    member_role = after.guild.get_role(MEMBER_ROLE_ID)
+    unverified_role = after.guild.get_role(UNVERIFIED_ROLE_ID)
+    
+    # If they have Member role AND still have Unverified role...
+    if member_role in after.roles and unverified_role in after.roles:
+        try:
+            # Remove the Unverified role
+            await after.remove_roles(unverified_role)
+            print(f"🔄 Verified: Removed Unverified role from {after.name}")
+        except discord.Forbidden:
+            print("❌ ERROR: Bot role is too low to remove Unverified role!")
 
 @bot.event
 async def on_message(message):
