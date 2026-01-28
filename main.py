@@ -17,13 +17,13 @@ ALLOWED_CHANNEL_ID = 1465880033481720011
 # Role required to use /announce AND see Tickets (Admin)
 ADMIN_ROLE_ID = 1465896921074897140
 
-# [NEW] The "Verified" Member Role (Given by RestoreCord)
+# The "Verified" Member Role (Given by RestoreCord)
 MEMBER_ROLE_ID = 1465888391580090379
 
-# [NEW] The "Unverified" Role (Given on Join, Removed on Verify)
+# The "Unverified" Role (Given on Join, Removed on Verify)
 UNVERIFIED_ROLE_ID = 1465897609267777748
 
-# [NEW] Category ID where tickets will be created
+# Category ID where tickets will be created
 TICKET_CATEGORY_ID = 1465924314854326313
 
 # --- 2. THE "HEARTBEAT" SERVER ---
@@ -159,9 +159,12 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
                 aspect_ratio = watermark.height / watermark.width
                 target_height = int(target_width * aspect_ratio)
                 watermark = watermark.resize((target_width, target_height), Image.Resampling.LANCZOS)
+                
+                # UPDATED HERE: 0.25 Opacity (25%)
                 alpha = watermark.split()[3]
-                alpha = ImageEnhance.Brightness(alpha).enhance(0.5)
+                alpha = ImageEnhance.Brightness(alpha).enhance(0.25)
                 watermark.putalpha(alpha)
+                
                 watermark_layer = Image.new('RGBA', base_img.size, (0,0,0,0))
                 for x in range(0, base_img.width, watermark.width):
                     for y in range(0, base_img.height, watermark.height):
@@ -179,11 +182,10 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
         print(f"Error: {e}")
         await interaction.followup.send("❌ An error occurred processing the image.")
 
-# COMMAND 2: /announce (Fixed Timeout & Errors)
+# COMMAND 2: /announce
 @bot.tree.command(name="announce", description="Post an official announcement.")
 @app_commands.describe(title="The title", message="Use \\n for new lines", image="Optional banner image")
 async def announce(interaction: discord.Interaction, title: str, message: str, image: discord.Attachment = None):
-    # Defer immediately to avoid timeout
     await interaction.response.defer(ephemeral=True)
 
     user_role_ids = [role.id for role in interaction.user.roles]
@@ -231,7 +233,6 @@ async def ticketpanel(interaction: discord.Interaction, title: str = "Support Ti
 
 # --- 6. EVENTS & ROLE LOGIC ---
 
-# 1. On Join: Give Unverified Role
 @bot.event
 async def on_member_join(member):
     if UNVERIFIED_ROLE_ID != 0:
@@ -243,17 +244,13 @@ async def on_member_join(member):
             except discord.Forbidden:
                 print("❌ ERROR: Bot role is too low to assign Unverified role!")
 
-# 2. On Update: Check for Verification & Swap Roles
 @bot.event
 async def on_member_update(before, after):
-    # Check if the user has the "Member" role (Given by RestoreCord)
     member_role = after.guild.get_role(MEMBER_ROLE_ID)
     unverified_role = after.guild.get_role(UNVERIFIED_ROLE_ID)
     
-    # If they have Member role AND still have Unverified role...
     if member_role in after.roles and unverified_role in after.roles:
         try:
-            # Remove the Unverified role
             await after.remove_roles(unverified_role)
             print(f"🔄 Verified: Removed Unverified role from {after.name}")
         except discord.Forbidden:
