@@ -20,9 +20,9 @@ ADMIN_ROLE_ID = 1465896921074897140
 # Role to give NEW members automatically
 NEW_MEMBER_ROLE_ID = 1465897609267777748
 
-# [NEW] Category ID where tickets will be created
-# Create a category in Discord (e.g. "Support"), right-click it -> Copy ID
-TICKET_CATEGORY_ID = 1465880096999997654  
+# Category ID where tickets will be created
+# Create a category in Discord, right-click it -> Copy ID
+TICKET_CATEGORY_ID = 000000000000000000  
 
 # --- 2. THE "HEARTBEAT" SERVER ---
 app = Flask('')
@@ -43,10 +43,10 @@ class TicketLauncher(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.blurple, emoji="📩", custom_id="ticket_button")
+    # UPDATED: Changed style to DANGER (Red) to match Orange theme
+    @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.danger, emoji="📩", custom_id="ticket_button")
     async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
         
-        # Check if category is set
         if TICKET_CATEGORY_ID == 0:
             await interaction.response.send_message("❌ Ticket Category ID not configured in code.", ephemeral=True)
             return
@@ -58,25 +58,21 @@ class TicketLauncher(discord.ui.View):
             await interaction.response.send_message("❌ Ticket Category not found.", ephemeral=True)
             return
 
-        # Check if user already has a ticket (optional, prevents spam)
         existing_channel = discord.utils.get(guild.text_channels, name=f"ticket-{interaction.user.name.lower()}")
         if existing_channel:
             await interaction.response.send_message(f"❌ You already have a ticket open: {existing_channel.mention}", ephemeral=True)
             return
 
-        # Set Permissions
         overwrites = {
             guild.default_role: discord.PermissionOverwrite(read_messages=False),
             interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
             guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
         }
 
-        # Add Admin Role permissions
         admin_role = guild.get_role(ADMIN_ROLE_ID)
         if admin_role:
             overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
 
-        # Create Channel
         try:
             channel = await guild.create_text_channel(
                 name=f"ticket-{interaction.user.name}",
@@ -86,11 +82,10 @@ class TicketLauncher(discord.ui.View):
             
             await interaction.response.send_message(f"✅ Ticket created: {channel.mention}", ephemeral=True)
             
-            # Send Welcome Message inside the new ticket
             embed = discord.Embed(
                 title=f"Support Ticket - {interaction.user.name}",
                 description="Staff will be with you shortly.\nClick the button below to close this ticket.",
-                color=discord.Color.green()
+                color=discord.Color(0xff7828) # Updated to match theme
             )
             await channel.send(f"{interaction.user.mention}", embed=embed, view=CloseButton())
 
@@ -101,7 +96,7 @@ class CloseButton(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, emoji="🔒", custom_id="close_ticket")
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.secondary, emoji="🔒", custom_id="close_ticket")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.send_message("🔒 Ticket closing in 5 seconds...")
         await interaction.channel.delete()
@@ -115,7 +110,6 @@ class VouchBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
-        # Register the Views so buttons work after restart
         self.add_view(TicketLauncher())
         self.add_view(CloseButton())
         await self.tree.sync()
@@ -200,7 +194,7 @@ async def announce(interaction: discord.Interaction, title: str, message: str, i
     await interaction.channel.send(embed=embed)
     await interaction.response.send_message("✅ Sent!", ephemeral=True)
 
-# COMMAND 3: /ticketpanel (NEW)
+# COMMAND 3: /ticketpanel (UPDATED COLOR)
 @bot.tree.command(name="ticketpanel", description="Setup the support ticket panel.")
 async def ticketpanel(interaction: discord.Interaction, title: str = "Support Tickets", description: str = "Click below to open a ticket."):
     # Permission Check
@@ -209,7 +203,8 @@ async def ticketpanel(interaction: discord.Interaction, title: str = "Support Ti
         await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
-    embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
+    # UPDATED: Color matches /announce
+    embed = discord.Embed(title=title, description=description, color=discord.Color(0xff7828))
     embed.set_footer(text="Prime Refunds Support")
     
     await interaction.channel.send(embed=embed, view=TicketLauncher())
