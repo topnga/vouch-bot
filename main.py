@@ -8,18 +8,19 @@ from PIL import Image, ImageEnhance
 from flask import Flask
 from threading import Thread
 
-# --- CONFIGURATION ---
+# --- 1. CONFIGURATION ---
 TOKEN = os.environ.get('DISCORD_TOKEN') 
 
-# 1. CHANNEL ID (Replace with your actual Channel ID)
+# Channel where /success works
 ALLOWED_CHANNEL_ID = 1465880033481720011
 
-# 2. ROLE ID (Security)
-# If you want to restrict this command to a specific role (e.g., "Client"), 
-# paste the Role ID below. If you put 0, EVERYONE can use it.
-ALLOWED_ROLE_ID = 1465888391580090379  
+# Role required to use /announce (Admin/Staff Role)
+ADMIN_ROLE_ID = 1465896921074897140
 
-# --- THE "HEARTBEAT" SERVER ---
+# Role to give NEW members automatically
+NEW_MEMBER_ROLE_ID = 1465897609267777748
+
+# --- 2. THE "HEARTBEAT" SERVER ---
 app = Flask('')
 
 @app.route('/')
@@ -33,11 +34,13 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- BOT SETUP ---
+# --- 3. BOT SETUP ---
 class VouchBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
+        # ENABLE MEMBER INTENT (Required for Auto-Role)
+        intents.members = True 
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
@@ -50,14 +53,14 @@ class VouchBot(commands.Bot):
 
 bot = VouchBot()
 
-# --- COMMANDS ---
+# --- 4. COMMANDS ---
 
-# Updated command name to "/success" and added "note" field
+# COMMAND 1: /success (Open to everyone, locked to channel)
 @bot.tree.command(name="success", description="Watermark and save your proof.")
 @app_commands.describe(image="Upload your screenshot", note="Add a short side note (optional)")
 async def success(interaction: discord.Interaction, image: discord.Attachment, note: str = None):
     
-    # --- 1. CHANNEL CHECK ---
+    # Channel Check
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
         await interaction.response.send_message(
             f"❌ Wrong channel! Please use <#{ALLOWED_CHANNEL_ID}>.", 
@@ -65,19 +68,7 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
         )
         return
 
-    # --- 2. ROLE CHECK (New Feature) ---
-    # Only checks if you set a Role ID above.
-    if ALLOWED_ROLE_ID != 0:
-        # Get list of user's role IDs
-        user_role_ids = [role.id for role in interaction.user.roles]
-        if ALLOWED_ROLE_ID not in user_role_ids:
-            await interaction.response.send_message(
-                f"❌ You need the <@&{ALLOWED_ROLE_ID}> role to use this command.", 
-                ephemeral=True
-            )
-            return
-
-    # --- FILE CHECK ---
+    # File Type Check
     if not image.content_type or not image.content_type.startswith('image/'):
         await interaction.response.send_message("❌ Invalid file type. Please upload an image.", ephemeral=True)
         return
@@ -105,22 +96,19 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
                     return
                 icon_data = await resp.read()
 
-        # --- IMAGE PROCESSING ---
+        # Image Processing (Opacity 50%, Size 1/3)
         with Image.open(io.BytesIO(user_image_data)).convert("RGBA") as base_img:
             with Image.open(io.BytesIO(icon_data)).convert("RGBA") as watermark:
                 
-                # UPDATE: Increased size (width // 3 instead of 6)
                 target_width = max(base_img.width // 3, 100)
                 aspect_ratio = watermark.height / watermark.width
                 target_height = int(target_width * aspect_ratio)
                 watermark = watermark.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
-                # UPDATE: Increased Opacity to 50% (0.5)
                 alpha = watermark.split()[3]
                 alpha = ImageEnhance.Brightness(alpha).enhance(0.5)
                 watermark.putalpha(alpha)
 
-                # Tile the watermark
                 watermark_layer = Image.new('RGBA', base_img.size, (0,0,0,0))
                 for x in range(0, base_img.width, watermark.width):
                     for y in range(0, base_img.height, watermark.height):
@@ -128,12 +116,10 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
 
                 final_img = Image.alpha_composite(base_img, watermark_layer)
 
-                # Save result
                 output_buffer = io.BytesIO()
                 final_img.save(output_buffer, format='PNG')
                 output_buffer.seek(0)
 
-                # Prepare the final message
                 response_content = f"✅ **Vouch recorded by {interaction.user.mention}**"
                 if note:
                     response_content += f"\n📝 **Note:** {note}"
@@ -145,15 +131,38 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
         print(f"Error: {e}")
         await interaction.followup.send("❌ An error occurred processing the image.")
 
+# COMMAND 2: /announce (Locked to specific Role ID)
 @bot.tree.command(name="announce", description="Post an official announcement.")
-@app_commands.checks.has_permissions(administrator=True)
 async def announce(interaction: discord.Interaction, title: str, message: str):
-    embed = discord.Embed(title=title, description=message, color=discord.Color.gold())
+    
+    # Check for the specific Admin Role ID
+    user_role_ids = [role.id for role in interaction.user.roles]
+    if ADMIN_ROLE_ID not in user_role_ids:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+
+    # UPDATED COLOR HERE: 0xff7828
+    embed = discord.Embed(title=title, description=message, color=discord.Color(0xff7828))
     embed.set_footer(text=f"Announcement by {interaction.user.display_name}")
+    
     await interaction.channel.send(embed=embed)
     await interaction.response.send_message("✅ Sent!", ephemeral=True)
 
-# --- JANITOR & TRAFFIC COP ---
+# --- 5. EVENTS ---
+
+# Event: Auto-Role on Join
+@bot.event
+async def on_member_join(member):
+    if NEW_MEMBER_ROLE_ID != 0:
+        role = member.guild.get_role(NEW_MEMBER_ROLE_ID)
+        if role:
+            try:
+                await member.add_roles(role)
+                print(f"✅ Assigned role to {member.name}")
+            except discord.Forbidden:
+                print("❌ ERROR: Bot role is too low! Move the bot role HIGHER than the member role.")
+
+# Event: Janitor & Traffic Cop
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
@@ -162,7 +171,6 @@ async def on_message(message):
     if message.channel.id == ALLOWED_CHANNEL_ID:
         try:
             await message.delete()
-            # Updated to mention /success
             warning = await message.channel.send(f"{message.author.mention} ❌ This channel is for `/success` commands only.")
             await warning.delete(delay=5)
         except:
@@ -170,6 +178,6 @@ async def on_message(message):
 
     await bot.process_commands(message)
 
-# --- START SERVER & BOT ---
+# --- 6. START ---
 keep_alive()
 bot.run(TOKEN)
