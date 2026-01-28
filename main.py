@@ -9,13 +9,17 @@ from flask import Flask
 from threading import Thread
 
 # --- CONFIGURATION ---
-# We get the token securely from Render's Environment Variables later
 TOKEN = os.environ.get('DISCORD_TOKEN') 
 
-# REPLACE THIS with your actual Vouch Channel ID (Right-click channel -> Copy ID)
+# 1. CHANNEL ID (Replace with your actual Channel ID)
 ALLOWED_CHANNEL_ID = 1465880033481720011
 
-# --- THE "HEARTBEAT" SERVER (For UptimeRobot) ---
+# 2. ROLE ID (Security)
+# If you want to restrict this command to a specific role (e.g., "Client"), 
+# paste the Role ID below. If you put 0, EVERYONE can use it.
+ALLOWED_ROLE_ID = 1465888391580090379  
+
+# --- THE "HEARTBEAT" SERVER ---
 app = Flask('')
 
 @app.route('/')
@@ -32,7 +36,6 @@ def keep_alive():
 # --- BOT SETUP ---
 class VouchBot(commands.Bot):
     def __init__(self):
-        # Intents allow the bot to read messages (needed for the Janitor system)
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(command_prefix="!", intents=intents)
@@ -42,7 +45,6 @@ class VouchBot(commands.Bot):
         print("Commands synced globally.")
 
     async def on_ready(self):
-        # Stealth Mode: Sets bot to invisible
         await self.change_presence(status=discord.Status.invisible)
         print(f'Logged in as {self.user} (Stealth Mode Active)')
 
@@ -50,16 +52,30 @@ bot = VouchBot()
 
 # --- COMMANDS ---
 
-@bot.tree.command(name="success", description="Vouch the service")
-@app_commands.describe(image="Upload a screenshot")
-async def vouch(interaction: discord.Interaction, image: discord.Attachment):
-    # --- CHANNEL LOCK ---
+# Updated command name to "/success" and added "note" field
+@bot.tree.command(name="success", description="Watermark and save your proof.")
+@app_commands.describe(image="Upload your screenshot", note="Add a short side note (optional)")
+async def success(interaction: discord.Interaction, image: discord.Attachment, note: str = None):
+    
+    # --- 1. CHANNEL CHECK ---
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
         await interaction.response.send_message(
             f"❌ Wrong channel! Please use <#{ALLOWED_CHANNEL_ID}>.", 
             ephemeral=True
         )
         return
+
+    # --- 2. ROLE CHECK (New Feature) ---
+    # Only checks if you set a Role ID above.
+    if ALLOWED_ROLE_ID != 0:
+        # Get list of user's role IDs
+        user_role_ids = [role.id for role in interaction.user.roles]
+        if ALLOWED_ROLE_ID not in user_role_ids:
+            await interaction.response.send_message(
+                f"❌ You need the <@&{ALLOWED_ROLE_ID}> role to use this command.", 
+                ephemeral=True
+            )
+            return
 
     # --- FILE CHECK ---
     if not image.content_type or not image.content_type.startswith('image/'):
@@ -93,15 +109,15 @@ async def vouch(interaction: discord.Interaction, image: discord.Attachment):
         with Image.open(io.BytesIO(user_image_data)).convert("RGBA") as base_img:
             with Image.open(io.BytesIO(icon_data)).convert("RGBA") as watermark:
                 
-                # Resize watermark relative to image size
-                target_width = max(base_img.width // 6, 50)
+                # UPDATE: Increased size (width // 3 instead of 6)
+                target_width = max(base_img.width // 3, 100)
                 aspect_ratio = watermark.height / watermark.width
                 target_height = int(target_width * aspect_ratio)
                 watermark = watermark.resize((target_width, target_height), Image.Resampling.LANCZOS)
 
-                # Set Opacity to 20%
+                # UPDATE: Increased Opacity to 50% (0.5)
                 alpha = watermark.split()[3]
-                alpha = ImageEnhance.Brightness(alpha).enhance(0.2)
+                alpha = ImageEnhance.Brightness(alpha).enhance(0.5)
                 watermark.putalpha(alpha)
 
                 # Tile the watermark
@@ -117,8 +133,13 @@ async def vouch(interaction: discord.Interaction, image: discord.Attachment):
                 final_img.save(output_buffer, format='PNG')
                 output_buffer.seek(0)
 
+                # Prepare the final message
+                response_content = f"✅ **Vouch recorded by {interaction.user.mention}**"
+                if note:
+                    response_content += f"\n📝 **Note:** {note}"
+
                 file = discord.File(fp=output_buffer, filename=f"vouched_{image.filename}")
-                await interaction.followup.send(content=f"✅ **Vouch recorded by {interaction.user.mention}**", file=file)
+                await interaction.followup.send(content=response_content, file=file)
 
     except Exception as e:
         print(f"Error: {e}")
@@ -138,21 +159,17 @@ async def on_message(message):
     if message.author == bot.user:
         return
         
-    # Only run Janitor inside the Vouch Channel
     if message.channel.id == ALLOWED_CHANNEL_ID:
         try:
-            # Delete any message that is just text (not a bot command interaction)
             await message.delete()
-            warning = await message.channel.send(f"{message.author.mention} ❌ This channel is for `/vouch` commands only.")
-            # Auto-delete warning after 5 seconds
+            # Updated to mention /success
+            warning = await message.channel.send(f"{message.author.mention} ❌ This channel is for `/success` commands only.")
             await warning.delete(delay=5)
         except:
-            pass # Permissions error or message already deleted
+            pass 
 
     await bot.process_commands(message)
 
 # --- START SERVER & BOT ---
 keep_alive()
-
 bot.run(TOKEN)
-
