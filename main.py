@@ -132,7 +132,7 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
         await interaction.followup.send("❌ An error occurred processing the image.")
 
 # COMMAND 2: /announce (Locked to specific Role ID)
-# UPDATES: Removed footer, added line break support, added optional image
+# UPDATES: Added footer "Prime Refunds"
 @bot.tree.command(name="announce", description="Post an official announcement.")
 @app_commands.describe(
     title="The title of the announcement",
@@ -153,6 +153,9 @@ async def announce(interaction: discord.Interaction, title: str, message: str, i
     # Create Embed
     embed = discord.Embed(title=title, description=formatted_message, color=discord.Color(0xff7828))
     
+    # Add Footer
+    embed.set_footer(text="Prime Refunds")
+
     # If user provided an image, attach it as the big bottom banner
     if image:
         if image.content_type.startswith('image/'):
