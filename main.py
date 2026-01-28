@@ -50,8 +50,8 @@ bot = VouchBot()
 
 # --- COMMANDS ---
 
-@bot.tree.command(name="vouch", description="Watermark and save your proof.")
-@app_commands.describe(image="Upload your screenshot here")
+@bot.tree.command(name="success", description="Vouch the service")
+@app_commands.describe(image="Upload a screenshot")
 async def vouch(interaction: discord.Interaction, image: discord.Attachment):
     # --- CHANNEL LOCK ---
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
@@ -155,3 +155,4 @@ async def on_message(message):
 keep_alive()
 
 bot.run(TOKEN)
+
