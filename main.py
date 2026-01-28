@@ -132,8 +132,14 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
         await interaction.followup.send("❌ An error occurred processing the image.")
 
 # COMMAND 2: /announce (Locked to specific Role ID)
+# UPDATES: Removed footer, added line break support, added optional image
 @bot.tree.command(name="announce", description="Post an official announcement.")
-async def announce(interaction: discord.Interaction, title: str, message: str):
+@app_commands.describe(
+    title="The title of the announcement",
+    message="Use \\n to create new lines (e.g. Line 1 \\n Line 2)",
+    image="Optional: Upload a banner image for the bottom"
+)
+async def announce(interaction: discord.Interaction, title: str, message: str, image: discord.Attachment = None):
     
     # Check for the specific Admin Role ID
     user_role_ids = [role.id for role in interaction.user.roles]
@@ -141,9 +147,16 @@ async def announce(interaction: discord.Interaction, title: str, message: str):
         await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
-    # UPDATED COLOR HERE: 0xff7828
-    embed = discord.Embed(title=title, description=message, color=discord.Color(0xff7828))
-    embed.set_footer(text=f"Announcement by {interaction.user.display_name}")
+    # Process "newline" characters so you can type paragraphs
+    formatted_message = message.replace('\\n', '\n')
+
+    # Create Embed
+    embed = discord.Embed(title=title, description=formatted_message, color=discord.Color(0xff7828))
+    
+    # If user provided an image, attach it as the big bottom banner
+    if image:
+        if image.content_type.startswith('image/'):
+            embed.set_image(url=image.url)
     
     await interaction.channel.send(embed=embed)
     await interaction.response.send_message("✅ Sent!", ephemeral=True)
