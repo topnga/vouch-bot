@@ -14,11 +14,15 @@ TOKEN = os.environ.get('DISCORD_TOKEN')
 # Channel where /success works
 ALLOWED_CHANNEL_ID = 1465880033481720011
 
-# Role required to use /announce (Admin/Staff Role)
+# Role required to use /announce AND see Tickets
 ADMIN_ROLE_ID = 1465896921074897140
 
 # Role to give NEW members automatically
 NEW_MEMBER_ROLE_ID = 1465897609267777748
+
+# [NEW] Category ID where tickets will be created
+# Create a category in Discord (e.g. "Support"), right-click it -> Copy ID
+TICKET_CATEGORY_ID = 1465880096999997654  
 
 # --- 2. THE "HEARTBEAT" SERVER ---
 app = Flask('')
@@ -34,16 +38,86 @@ def keep_alive():
     t = Thread(target=run)
     t.start()
 
-# --- 3. BOT SETUP ---
+# --- 3. TICKET SYSTEM CLASSES ---
+class TicketLauncher(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Open Ticket", style=discord.ButtonStyle.blurple, emoji="📩", custom_id="ticket_button")
+    async def ticket(self, interaction: discord.Interaction, button: discord.ui.Button):
+        
+        # Check if category is set
+        if TICKET_CATEGORY_ID == 0:
+            await interaction.response.send_message("❌ Ticket Category ID not configured in code.", ephemeral=True)
+            return
+
+        guild = interaction.guild
+        category = guild.get_channel(TICKET_CATEGORY_ID)
+        
+        if not category:
+            await interaction.response.send_message("❌ Ticket Category not found.", ephemeral=True)
+            return
+
+        # Check if user already has a ticket (optional, prevents spam)
+        existing_channel = discord.utils.get(guild.text_channels, name=f"ticket-{interaction.user.name.lower()}")
+        if existing_channel:
+            await interaction.response.send_message(f"❌ You already have a ticket open: {existing_channel.mention}", ephemeral=True)
+            return
+
+        # Set Permissions
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(read_messages=False),
+            interaction.user: discord.PermissionOverwrite(read_messages=True, send_messages=True),
+            guild.me: discord.PermissionOverwrite(read_messages=True, send_messages=True)
+        }
+
+        # Add Admin Role permissions
+        admin_role = guild.get_role(ADMIN_ROLE_ID)
+        if admin_role:
+            overwrites[admin_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+        # Create Channel
+        try:
+            channel = await guild.create_text_channel(
+                name=f"ticket-{interaction.user.name}",
+                category=category,
+                overwrites=overwrites
+            )
+            
+            await interaction.response.send_message(f"✅ Ticket created: {channel.mention}", ephemeral=True)
+            
+            # Send Welcome Message inside the new ticket
+            embed = discord.Embed(
+                title=f"Support Ticket - {interaction.user.name}",
+                description="Staff will be with you shortly.\nClick the button below to close this ticket.",
+                color=discord.Color.green()
+            )
+            await channel.send(f"{interaction.user.mention}", embed=embed, view=CloseButton())
+
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error creating ticket: {e}", ephemeral=True)
+
+class CloseButton(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Close Ticket", style=discord.ButtonStyle.red, emoji="🔒", custom_id="close_ticket")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_message("🔒 Ticket closing in 5 seconds...")
+        await interaction.channel.delete()
+
+# --- 4. BOT SETUP ---
 class VouchBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         intents.message_content = True
-        # ENABLE MEMBER INTENT (Required for Auto-Role)
         intents.members = True 
         super().__init__(command_prefix="!", intents=intents)
 
     async def setup_hook(self):
+        # Register the Views so buttons work after restart
+        self.add_view(TicketLauncher())
+        self.add_view(CloseButton())
         await self.tree.sync()
         print("Commands synced globally.")
 
@@ -53,42 +127,30 @@ class VouchBot(commands.Bot):
 
 bot = VouchBot()
 
-# --- 4. COMMANDS ---
+# --- 5. COMMANDS ---
 
-# COMMAND 1: /success (Open to everyone, locked to channel)
+# COMMAND 1: /success
 @bot.tree.command(name="success", description="Watermark and save your proof.")
 @app_commands.describe(image="Upload your screenshot", note="Add a short side note (optional)")
 async def success(interaction: discord.Interaction, image: discord.Attachment, note: str = None):
-    
-    # Channel Check
     if interaction.channel_id != ALLOWED_CHANNEL_ID:
-        await interaction.response.send_message(
-            f"❌ Wrong channel! Please use <#{ALLOWED_CHANNEL_ID}>.", 
-            ephemeral=True
-        )
+        await interaction.response.send_message(f"❌ Wrong channel! Please use <#{ALLOWED_CHANNEL_ID}>.", ephemeral=True)
         return
-
-    # File Type Check
     if not image.content_type or not image.content_type.startswith('image/'):
         await interaction.response.send_message("❌ Invalid file type. Please upload an image.", ephemeral=True)
         return
 
     await interaction.response.defer()
-
     try:
         async with aiohttp.ClientSession() as session:
-            # Download User Image
             async with session.get(image.url) as resp:
                 if resp.status != 200:
                     await interaction.followup.send("❌ Failed to download image.")
                     return
                 user_image_data = await resp.read()
-
-            # Download Server Icon
             if not interaction.guild.icon:
                 await interaction.followup.send("❌ This server has no icon.")
                 return
-            
             icon_url = interaction.guild.icon.replace(format='png', size=128).url
             async with session.get(icon_url) as resp:
                 if resp.status != 200:
@@ -96,77 +158,64 @@ async def success(interaction: discord.Interaction, image: discord.Attachment, n
                     return
                 icon_data = await resp.read()
 
-        # Image Processing (Opacity 50%, Size 1/3)
         with Image.open(io.BytesIO(user_image_data)).convert("RGBA") as base_img:
             with Image.open(io.BytesIO(icon_data)).convert("RGBA") as watermark:
-                
                 target_width = max(base_img.width // 3, 100)
                 aspect_ratio = watermark.height / watermark.width
                 target_height = int(target_width * aspect_ratio)
                 watermark = watermark.resize((target_width, target_height), Image.Resampling.LANCZOS)
-
                 alpha = watermark.split()[3]
                 alpha = ImageEnhance.Brightness(alpha).enhance(0.5)
                 watermark.putalpha(alpha)
-
                 watermark_layer = Image.new('RGBA', base_img.size, (0,0,0,0))
                 for x in range(0, base_img.width, watermark.width):
                     for y in range(0, base_img.height, watermark.height):
                         watermark_layer.paste(watermark, (x, y))
-
                 final_img = Image.alpha_composite(base_img, watermark_layer)
-
                 output_buffer = io.BytesIO()
                 final_img.save(output_buffer, format='PNG')
                 output_buffer.seek(0)
-
                 response_content = f"✅ **Vouch recorded by {interaction.user.mention}**"
                 if note:
                     response_content += f"\n📝 **Note:** {note}"
-
                 file = discord.File(fp=output_buffer, filename=f"vouched_{image.filename}")
                 await interaction.followup.send(content=response_content, file=file)
-
     except Exception as e:
         print(f"Error: {e}")
         await interaction.followup.send("❌ An error occurred processing the image.")
 
-# COMMAND 2: /announce (Locked to specific Role ID)
-# UPDATES: Added footer "Prime Refunds"
+# COMMAND 2: /announce
 @bot.tree.command(name="announce", description="Post an official announcement.")
-@app_commands.describe(
-    title="The title of the announcement",
-    message="Use \\n to create new lines (e.g. Line 1 \\n Line 2)",
-    image="Optional: Upload a banner image for the bottom"
-)
+@app_commands.describe(title="The title", message="Use \\n for new lines", image="Optional banner image")
 async def announce(interaction: discord.Interaction, title: str, message: str, image: discord.Attachment = None):
-    
-    # Check for the specific Admin Role ID
+    user_role_ids = [role.id for role in interaction.user.roles]
+    if ADMIN_ROLE_ID not in user_role_ids:
+        await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
+        return
+    formatted_message = message.replace('\\n', '\n')
+    embed = discord.Embed(title=title, description=formatted_message, color=discord.Color(0xff7828))
+    embed.set_footer(text="Prime Refunds")
+    if image and image.content_type.startswith('image/'):
+        embed.set_image(url=image.url)
+    await interaction.channel.send(embed=embed)
+    await interaction.response.send_message("✅ Sent!", ephemeral=True)
+
+# COMMAND 3: /ticketpanel (NEW)
+@bot.tree.command(name="ticketpanel", description="Setup the support ticket panel.")
+async def ticketpanel(interaction: discord.Interaction, title: str = "Support Tickets", description: str = "Click below to open a ticket."):
+    # Permission Check
     user_role_ids = [role.id for role in interaction.user.roles]
     if ADMIN_ROLE_ID not in user_role_ids:
         await interaction.response.send_message("❌ You do not have permission to use this command.", ephemeral=True)
         return
 
-    # Process "newline" characters so you can type paragraphs
-    formatted_message = message.replace('\\n', '\n')
-
-    # Create Embed
-    embed = discord.Embed(title=title, description=formatted_message, color=discord.Color(0xff7828))
+    embed = discord.Embed(title=title, description=description, color=discord.Color.blurple())
+    embed.set_footer(text="Prime Refunds Support")
     
-    # Add Footer
-    embed.set_footer(text="Prime Refunds")
+    await interaction.channel.send(embed=embed, view=TicketLauncher())
+    await interaction.response.send_message("✅ Ticket panel created!", ephemeral=True)
 
-    # If user provided an image, attach it as the big bottom banner
-    if image:
-        if image.content_type.startswith('image/'):
-            embed.set_image(url=image.url)
-    
-    await interaction.channel.send(embed=embed)
-    await interaction.response.send_message("✅ Sent!", ephemeral=True)
-
-# --- 5. EVENTS ---
-
-# Event: Auto-Role on Join
+# --- 6. EVENTS ---
 @bot.event
 async def on_member_join(member):
     if NEW_MEMBER_ROLE_ID != 0:
@@ -176,14 +225,12 @@ async def on_member_join(member):
                 await member.add_roles(role)
                 print(f"✅ Assigned role to {member.name}")
             except discord.Forbidden:
-                print("❌ ERROR: Bot role is too low! Move the bot role HIGHER than the member role.")
+                print("❌ ERROR: Bot role is too low!")
 
-# Event: Janitor & Traffic Cop
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
         return
-        
     if message.channel.id == ALLOWED_CHANNEL_ID:
         try:
             await message.delete()
@@ -191,9 +238,8 @@ async def on_message(message):
             await warning.delete(delay=5)
         except:
             pass 
-
     await bot.process_commands(message)
 
-# --- 6. START ---
+# --- 7. START ---
 keep_alive()
 bot.run(TOKEN)
