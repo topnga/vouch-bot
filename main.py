@@ -13,7 +13,7 @@ from threading import Thread
 TOKEN = os.environ.get('DISCORD_TOKEN') 
 
 # REPLACE THIS with your actual Vouch Channel ID (Right-click channel -> Copy ID)
-ALLOWED_CHANNEL_ID = 123456789012345678
+ALLOWED_CHANNEL_ID = 1465880033481720011
 
 # --- THE "HEARTBEAT" SERVER (For UptimeRobot) ---
 app = Flask('')
@@ -153,4 +153,5 @@ async def on_message(message):
 
 # --- START SERVER & BOT ---
 keep_alive()
+
 bot.run(TOKEN)
